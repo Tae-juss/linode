@@ -1,0 +1,299 @@
+---
+- name: Configure MongoDB replica set
+  hosts: mongo
+  become: true
+  gather_facts: true
+
+  vars:
+    mongodb_version_series: "8.0"
+    mongodb_repo_ubuntu_codename: "noble"
+    mongodb_port: 27017
+    mongodb_replset_name: "rs0"
+    # MongoDB replica sets require keyFile/x509 for authorization.
+    mongodb_enable_authorization: false
+    mongodb_admin_user: "admin"
+    mongodb_admin_password_file: ".secrets/mongodb_admin_password.txt"
+    mongodb_admin_password: "{{ lookup('ansible.builtin.file', mongodb_admin_password_file) | trim }}"
+    mongo_min_concurrent_connections: 5000
+    mongo_auto_raise_nofile_if_needed: true
+
+  handlers:
+    - name: restart mongod
+      ansible.builtin.systemd:
+        name: mongod
+        state: restarted
+        daemon_reload: true
+
+  tasks:
+    - name: Validate MongoDB admin password is present
+      ansible.builtin.assert:
+        that:
+          - mongodb_admin_password | length > 0
+        fail_msg: "MongoDB admin password file is missing or empty"
+        success_msg: "MongoDB admin password loaded"
+
+    - name: Install prerequisite packages
+      ansible.builtin.apt:
+        name:
+          - gnupg
+          - curl
+          - ca-certificates
+        update_cache: true
+        state: present
+
+    - name: Install MongoDB apt key
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL https://pgp.mongodb.com/server-{{ mongodb_version_series }}.asc \
+          | gpg --dearmor -o /usr/share/keyrings/mongodb-server-{{ mongodb_version_series }}.gpg
+      args:
+        executable: /bin/bash
+        creates: "/usr/share/keyrings/mongodb-server-{{ mongodb_version_series }}.gpg"
+
+    - name: Configure MongoDB apt repository
+      ansible.builtin.copy:
+        dest: "/etc/apt/sources.list.d/mongodb-org-{{ mongodb_version_series }}.list"
+        mode: "0644"
+        content: |
+          deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-{{ mongodb_version_series }}.gpg ] https://repo.mongodb.org/apt/ubuntu {{ mongodb_repo_ubuntu_codename }}/mongodb-org/{{ mongodb_version_series }} multiverse
+
+    - name: Install MongoDB packages
+      ansible.builtin.apt:
+        name: mongodb-org
+        update_cache: true
+        state: present
+
+    - name: Deploy mongod config
+      ansible.builtin.template:
+        src: templates/mongod.conf.j2
+        dest: /etc/mongod.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart mongod
+
+    - name: Ensure mongod is enabled and started
+      ansible.builtin.systemd:
+        name: mongod
+        enabled: true
+        state: started
+
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Read mongod service nofile limit
+      ansible.builtin.command: systemctl show mongod -p LimitNOFILE --value
+      register: mongod_nofile_limit
+      changed_when: false
+
+    - name: Raise mongod nofile limit only when below minimum target
+      when:
+        - mongo_auto_raise_nofile_if_needed
+        - (mongod_nofile_limit.stdout | int) < mongo_min_concurrent_connections
+      block:
+        - name: Create systemd override directory
+          ansible.builtin.file:
+            path: /etc/systemd/system/mongod.service.d
+            state: directory
+            mode: "0755"
+
+        - name: Set mongod LimitNOFILE override
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/mongod.service.d/override.conf
+            mode: "0644"
+            content: |
+              [Service]
+              LimitNOFILE=64000
+          notify: restart mongod
+
+        - name: Apply updated systemd override
+          ansible.builtin.meta: flush_handlers
+
+        - name: Re-read mongod service nofile limit
+          ansible.builtin.command: systemctl show mongod -p LimitNOFILE --value
+          register: mongod_nofile_limit_after
+          changed_when: false
+
+        - name: Verify nofile is now >= minimum concurrent connection target
+          ansible.builtin.assert:
+            that:
+              - (mongod_nofile_limit_after.stdout | int) >= mongo_min_concurrent_connections
+            fail_msg: "mongod LimitNOFILE is still below required target"
+            success_msg: "mongod nofile override now meets the minimum target"
+
+    - name: Verify effective nofile limit meets minimum target
+      ansible.builtin.assert:
+        that:
+          - (mongod_nofile_limit.stdout | int) >= mongo_min_concurrent_connections or ((mongod_nofile_limit_after.stdout | default('0')) | int) >= mongo_min_concurrent_connections
+        fail_msg: "Effective mongod nofile limit is below 5000"
+        success_msg: "Effective mongod nofile limit supports at least 5000 concurrent connections"
+
+    - name: Wait for mongod to accept local connections
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ mongodb_port }}"
+        delay: 1
+        timeout: 60
+
+    - name: Build replica set members list
+      ansible.builtin.set_fact:
+        mongo_rs_members: |
+          [
+          {% for h in groups['mongo'] %}
+            {_id: {{ loop.index0 }}, host: "{{ hostvars[h].mongo_private_ip }}:{{ mongodb_port }}"}{% if not loop.last %},{% endif %}
+          {% endfor %}
+          ]
+      run_once: true
+
+    - name: Initialize replica set on first node if not already initialized
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mongosh --quiet --eval '
+          const desired = {{ mongo_rs_members }};
+          try {
+            const s = rs.status();
+            if (s.ok === 1) {
+              print("Replica set already initialized");
+              quit(0);
+            }
+          } catch (e) {}
+          rs.initiate({_id: "{{ mongodb_replset_name }}", members: desired});
+        '
+      args:
+        executable: /bin/bash
+      register: rs_init_unauth
+      failed_when: false
+      changed_when: "'Replica set already initialized' not in rs_init_unauth.stdout"
+      retries: 10
+      delay: 3
+      until: rs_init_unauth.rc == 0
+      run_once: true
+      delegate_to: "{{ groups['mongo'][0] }}"
+
+    - name: Initialize replica set with auth if unauthenticated call failed
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mongosh --quiet -u '{{ mongodb_admin_user }}' -p '{{ mongodb_admin_password }}' --authenticationDatabase admin --eval '
+          const desired = {{ mongo_rs_members }};
+          const s = rs.status();
+          if (s.ok === 1) {
+            print("Replica set already initialized");
+            quit(0);
+          }
+          rs.initiate({_id: "{{ mongodb_replset_name }}", members: desired});
+        '
+      args:
+        executable: /bin/bash
+      no_log: true
+      register: rs_init_auth
+      retries: 10
+      delay: 3
+      until: rs_init_auth.rc == 0
+      when:
+        - mongodb_enable_authorization
+        - rs_init_unauth.rc != 0
+      run_once: true
+      delegate_to: "{{ groups['mongo'][0] }}"
+
+    - name: Check if current node is PRIMARY
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mongosh --quiet --eval 'quit(db.hello().isWritablePrimary ? 0 : 1)'
+      args:
+        executable: /bin/bash
+      register: mongo_primary_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Record PRIMARY role per host
+      ansible.builtin.set_fact:
+        mongo_is_primary: "{{ mongo_primary_probe.rc == 0 }}"
+
+    - name: Initialize PRIMARY host variable
+      ansible.builtin.set_fact:
+        mongo_primary_host: ""
+      run_once: true
+
+    - name: Select PRIMARY host
+      ansible.builtin.set_fact:
+        mongo_primary_host: "{{ item }}"
+      loop: "{{ groups['mongo'] }}"
+      when: hostvars[item].mongo_is_primary | default(false)
+      run_once: true
+
+    - name: Ensure a PRIMARY host is detected
+      ansible.builtin.assert:
+        that:
+          - mongo_primary_host | length > 0
+        fail_msg: "No PRIMARY detected in replica set"
+        success_msg: "Detected PRIMARY host: {{ mongo_primary_host }}"
+      run_once: true
+
+    - name: Create MongoDB admin user on primary (unauthenticated path)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mongosh --quiet admin --eval '
+          const user = "{{ mongodb_admin_user }}";
+          const pwd = "{{ mongodb_admin_password }}";
+          if (db.getUser(user)) {
+            print("exists");
+            quit(0);
+          }
+          db.createUser({
+            user: user,
+            pwd: pwd,
+            roles: [{ role: "root", db: "admin" }]
+          });
+          print("created");
+        '
+      args:
+        executable: /bin/bash
+      register: admin_create_unauth
+      failed_when: false
+      changed_when: "'created' in admin_create_unauth.stdout"
+      retries: 10
+      delay: 3
+      until: admin_create_unauth.rc == 0
+      run_once: true
+      delegate_to: "{{ mongo_primary_host }}"
+
+    - name: Ensure MongoDB admin user exists (authenticated fallback)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mongosh --quiet -u '{{ mongodb_admin_user }}' -p '{{ mongodb_admin_password }}' --authenticationDatabase admin admin --eval '
+          const user = "{{ mongodb_admin_user }}";
+          if (db.getUser(user)) {
+            print("exists");
+            quit(0);
+          }
+          db.createUser({
+            user: user,
+            pwd: "{{ mongodb_admin_password }}",
+            roles: [{ role: "root", db: "admin" }]
+          });
+          print("created");
+        '
+      args:
+        executable: /bin/bash
+      no_log: true
+      when:
+        - mongodb_enable_authorization
+        - admin_create_unauth.rc != 0
+      run_once: true
+      delegate_to: "{{ mongo_primary_host }}"
+
+    - name: Verify PRIMARY remains writable (with auth)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mongosh --quiet -u '{{ mongodb_admin_user }}' -p '{{ mongodb_admin_password }}' --authenticationDatabase admin --eval 'quit(db.hello().isWritablePrimary ? 0 : 1)'
+      args:
+        executable: /bin/bash
+      no_log: true
+      register: primary_check
+      changed_when: false
+      retries: 20
+      delay: 3
+      until: primary_check.rc == 0
+      when: mongodb_enable_authorization
+      run_once: true
+      delegate_to: "{{ mongo_primary_host }}"

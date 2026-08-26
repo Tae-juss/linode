@@ -1,0 +1,22 @@
+storage:
+  dbPath: /var/lib/mongodb
+
+systemLog:
+  destination: file
+  logAppend: true
+  path: /var/log/mongodb/mongod.log
+
+net:
+  port: {{ mongodb_port }}
+  bindIpAll: true
+
+processManagement:
+  timeZoneInfo: /usr/share/zoneinfo
+
+replication:
+  replSetName: {{ mongodb_replset_name }}
+
+{% if mongodb_enable_authorization %}
+security:
+  authorization: enabled
+{% endif %}

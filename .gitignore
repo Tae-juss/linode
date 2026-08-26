@@ -1,0 +1,22 @@
+# Terraform local and state artifacts
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+
+# Local variable overrides and secrets
+*.auto.tfvars
+terraform.tfvars
+
+# Ansible local secrets
+ansible/.secrets/
+
+# Python artifacts
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

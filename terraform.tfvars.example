@@ -1,0 +1,23 @@
+region = "us-east"
+
+# Start with a 32GB RAM plan and resize in place later if load testing requires.
+# Replace with the exact 32GB dedicated plan ID available in your region.
+instance_type = "g6-dedicated-8"
+
+# 3 nodes for test, move to 5 for production.
+node_count = 3
+
+# Existing VPC subnet that you create/add separately.
+vpc_subnet_id = 123456
+
+# Replace with your own public IP allowlist CIDRs.
+operator_allowed_cidrs = [
+  "YOUR_PUBLIC_IP/32"
+]
+
+# Replace with the CIDR(s) used by your MongoDB VPC subnet.
+vpc_allowed_cidrs = [
+  "10.0.0.0/16"
+]
+
+ssh_public_key = "ssh-rsa REPLACE_WITH_YOUR_PUBLIC_KEY"
