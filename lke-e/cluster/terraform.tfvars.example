@@ -1,0 +1,96 @@
+# cluster/terraform.tfvars.example
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy this file to cluster/terraform.tfvars and fill in your values.
+# Never commit terraform.tfvars — it contains your API token.
+#
+# Usage:
+#   cd cluster/
+#   cp terraform.tfvars.example terraform.tfvars
+#   # edit terraform.tfvars
+#   terraform init && terraform apply
+#
+# Or use the root deploy.sh which handles both modules automatically.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Authentication ────────────────────────────────────────────────────────────
+# Required scopes: Linodes (rw), Kubernetes (rw), Firewalls (rw), VPCs (rw)
+# Generate at: https://cloud.linode.com/profile/tokens
+# Tip: set TF_VAR_linode_token in your shell to avoid storing the token in a file.
+linode_token = "YOUR_LINODE_API_TOKEN_HERE"
+
+# ── Cluster ───────────────────────────────────────────────────────────────────
+cluster_label = "my-lke-enterprise"
+region        = "us-lax"
+
+# Leave k8s_version unset (or null) to automatically pick the highest available
+# LKE Enterprise version fetched from the API at plan time.
+# To pin a specific release use the full enterprise ID shown in available_enterprise_versions:
+# k8s_version = "v1.34.6+lke2"
+#
+# Run this to list available versions:
+#   curl -s -H "Authorization: Bearer $LINODE_TOKEN" \
+#        "https://api.linode.com/v4beta/lke/tiers/enterprise/versions" | jq -r '.data[].id'
+
+tags = ["prod", "lke-enterprise"]
+
+# ── Node pools ────────────────────────────────────────────────────────────────
+# Enterprise clusters require g7-premium-* Linode types.
+# The autoscaler will manage node count between min and max.
+node_pools = [
+  {
+    type = "g7-premium-2"
+    min  = 3
+    max  = 10
+  }
+]
+
+# Multi-pool example — uncomment and replace the block above to use:
+# node_pools = [
+#   {
+#     type   = "g7-premium-4"
+#     min    = 3
+#     max    = 10
+#     labels = { "role" = "general" }
+#   },
+#   {
+#     # Tainted compute pool — workloads must tolerate this taint to land here
+#     type   = "g7-premium-8"
+#     min    = 1
+#     max    = 5
+#     labels = { "role" = "compute" }
+#     taints = [
+#       {
+#         key    = "role"
+#         value  = "compute"
+#         effect = "NoSchedule"
+#       }
+#     ]
+#   }
+# ]
+
+# ── Control plane ─────────────────────────────────────────────────────────────
+# WARNING: high_availability is IRREVERSIBLE once set to true.
+# It is recommended to leave this enabled for production Enterprise clusters.
+enable_ha_control_plane = true
+
+# Lock down the Kubernetes API server to specific source IPs.
+# Set enable_control_plane_acl = true and replace the CIDRs below with
+# your office/VPN/bastion IPs. Leave false for unrestricted access.
+enable_control_plane_acl = false
+# control_plane_acl_ipv4 = ["203.0.113.0/24"]  # replace with your IP(s)
+# control_plane_acl_ipv6 = ["2001:db8::/32"]
+
+# ── VPC attachment ────────────────────────────────────────────────────────────
+# "none"     → no VPC (default; nodes use public + private networking)
+# "create"   → provision a new VPC and subnet in this run
+# "existing" → reuse an existing VPC subnet (fill in IDs below)
+vpc_mode = "none"
+
+# Required when vpc_mode = "create":
+# vpc_label    = "my-lke-vpc"
+# subnet_label = "lke-subnet"
+# subnet_cidr  = "10.0.0.0/24"
+
+# Required when vpc_mode = "existing":
+# existing_vpc_id    = 12345
+# existing_subnet_id = 67890

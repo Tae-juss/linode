@@ -1,0 +1,58 @@
+# controller/terraform.tfvars.example
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy this file to controller/terraform.tfvars and fill in your values.
+# Never commit terraform.tfvars — it contains your API token.
+#
+# Note: kubeconfig_path is NOT set here — it is passed automatically by
+# deploy.sh as a -var argument after Phase 1 (cluster creation) completes.
+# If running this module standalone, provide it via:
+#   terraform apply -var="kubeconfig_path=/path/to/.kubeconfig"
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Authentication ────────────────────────────────────────────────────────────
+# The controller stores this in a Kubernetes Secret (kube-system/linode) and
+# uses it to manage Linode Cloud Firewalls via the API.
+# Tip: set TF_VAR_linode_token in your shell to avoid storing the token in a file.
+linode_token = "YOUR_LINODE_API_TOKEN_HERE"
+
+# ── Additional inbound firewall rules ─────────────────────────────────────────
+# These rules are appended AFTER the LKE default ruleset. The defaults already
+# cover all internal cluster traffic — only add application-facing ports here.
+#
+# The rules below (HTTP + HTTPS) are the built-in defaults. Override as needed.
+additional_inbound_rules = [
+  {
+    label       = "allow-http"
+    action      = "ACCEPT"
+    protocol    = "TCP"
+    ports       = "80"
+    description = "Allow HTTP traffic from the internet"
+    ipv4_cidrs  = ["0.0.0.0/0"]
+    ipv6_cidrs  = ["::/0"]
+  },
+  {
+    label       = "allow-https"
+    action      = "ACCEPT"
+    protocol    = "TCP"
+    ports       = "443"
+    description = "Allow HTTPS traffic from the internet"
+    ipv4_cidrs  = ["0.0.0.0/0"]
+    ipv6_cidrs  = ["::/0"]
+  }
+]
+
+# Restrict to a specific IP range example:
+# additional_inbound_rules = [
+#   {
+#     label       = "allow-https-office"
+#     action      = "ACCEPT"
+#     protocol    = "TCP"
+#     ports       = "443"
+#     description = "HTTPS from office and VPN only"
+#     ipv4_cidrs  = ["203.0.113.0/24", "198.51.100.0/24"]
+#     ipv6_cidrs  = []
+#   }
+# ]
+
+# Remove all application-facing rules (LKE defaults only):
+# additional_inbound_rules = []
