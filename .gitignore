@@ -1,22 +1,75 @@
-# Terraform local and state artifacts
+# ── Terraform state & credentials ─────────────────────────────────────────────
+# Never commit terraform.tfvars — they contain API tokens, SSH keys, and IPs.
+# Only *.tfvars.example files should be tracked.
+terraform.tfvars
+*.tfvars.backup
+*.auto.tfvars
+
+# Terraform working directories and lock files
 .terraform/
+.terraform.lock.hcl
+
+# State files (may contain secrets and infrastructure details)
 *.tfstate
-*.tfstate.backup
+*.tfstate.*
 *.tfplan
 tfplan
+
+# Crash logs
 crash.log
 crash.*.log
 
-# Local variable overrides and secrets
-*.auto.tfvars
-terraform.tfvars
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 
-# Ansible local secrets
+# ── Kubernetes credentials ─────────────────────────────────────────────────────
+# Written by the cluster module after provisioning — contains cluster CA + token
+.kubeconfig
+*.kubeconfig
+
+# ── Ansible secrets & generated inventories ───────────────────────────────────
+# .secrets/ dirs contain passwords and tokens
 ansible/.secrets/
+**/.secrets/
 
-# Python artifacts
+# inventory.ini is generated from the Terraform template and contains real IPs;
+# track only the *.tftpl template, not the rendered file.
+inventory.ini
+
+# ── SSH keys ──────────────────────────────────────────────────────────────────
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.pem
+*.key
+
+# ── Generic secret file patterns ──────────────────────────────────────────────
+*.env
+.env
+.env.*
+secrets.yml
+secrets.yaml
+secrets.json
+*_secret*
+*_password*
+*_token*
+*_credentials*
+
+# ── Python artifacts ──────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
+*.pyo
 
-# macOS
+# ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Editor noise ──────────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
