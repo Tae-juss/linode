@@ -1,0 +1,9 @@
+[mongo]
+%{ for node in nodes ~}
+${node.name} ansible_host=${node.public_ip} mongo_private_ip=${node.private_ip}
+%{ endfor ~}
+
+[mongo:vars]
+ansible_user=${ansible_user}
+ansible_port=${ansible_port}
+ansible_connection=ssh

@@ -1,7 +1,7 @@
 resource "linode_instance" "mongo" {
   count = var.node_count
 
-  label                = "tfansamk-mongo-${count.index + 1}"
+  label                = "prod-mongo-${count.index + 1}"
   region               = var.region
   type                 = var.instance_type
   image                = var.image
@@ -13,8 +13,8 @@ resource "linode_instance" "mongo" {
   ]
 
   tags = [
-    "mongodb",
-    "mongodb-replica-set"
+    "prod",
+    "prod-mongodb",
   ]
   interface {
     purpose   = "vpc"
@@ -31,8 +31,23 @@ locals {
   mongodb_allowed_cidrs = distinct(concat(var.operator_allowed_cidrs, var.vpc_allowed_cidrs))
 }
 
+resource "local_file" "ansible_inventory" {
+  filename = "${path.module}/ansible/inventory.ini"
+  content = templatefile("${path.module}/ansible/inventory.ini.tftpl", {
+    nodes = [
+      for i, instance in linode_instance.mongo : {
+        name       = "mongo${i + 1}"
+        public_ip  = instance.ip_address
+        private_ip = instance.interface[0].ipv4[0].vpc
+      }
+    ]
+    ansible_user = "root"
+    ansible_port = var.ssh_port
+  })
+}
+
 resource "linode_firewall" "mongo" {
-  label           = "tfansamk-mongo-firewall"
+  label           = "prod-mongo-firewall"
   inbound_policy  = "DROP"
   outbound_policy = "ACCEPT"
 

@@ -2,10 +2,11 @@ output "mongo_instances" {
   description = "MongoDB Linode instance details"
 
   value = {
-    for instance in linode_instance.mongo :
+    for i, instance in linode_instance.mongo :
     instance.label => {
-      id        = instance.id
-      public_ip = instance.ip_address
+      id         = instance.id
+      public_ip  = instance.ip_address
+      private_ip = instance.interface[0].ipv4[0].vpc
     }
   }
 }

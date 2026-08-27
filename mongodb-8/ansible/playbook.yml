@@ -8,7 +8,7 @@
     mongodb_version_series: "8.0"
     mongodb_repo_ubuntu_codename: "noble"
     mongodb_port: 27017
-    mongodb_replset_name: "rs0"
+    mongodb_replset_name: "prod"
     # MongoDB replica sets require keyFile/x509 for authorization.
     mongodb_enable_authorization: false
     mongodb_admin_user: "admin"
@@ -156,8 +156,19 @@
               print("Replica set already initialized");
               quit(0);
             }
-          } catch (e) {}
-          rs.initiate({_id: "{{ mongodb_replset_name }}", members: desired});
+          } catch (e) {
+            if (e.codeName && e.codeName !== "NotYetInitialized") {
+              print("rs.status() unexpected error: " + e.message);
+              quit(1);
+            }
+          }
+          const result = rs.initiate({_id: "{{ mongodb_replset_name }}", members: desired});
+          if (result.ok !== 1) {
+            print("rs.initiate failed: " + JSON.stringify(result));
+            quit(1);
+          }
+          print("Replica set initiated");
+          quit(0);
         '
       args:
         executable: /bin/bash
@@ -192,6 +203,20 @@
       when:
         - mongodb_enable_authorization
         - rs_init_unauth.rc != 0
+      run_once: true
+      delegate_to: "{{ groups['mongo'][0] }}"
+
+    - name: Wait for replica set to elect a PRIMARY
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mongosh --quiet --eval 'quit(rs.status().members.some(m => m.stateStr === "PRIMARY") ? 0 : 1)'
+      args:
+        executable: /bin/bash
+      register: rs_primary_wait
+      changed_when: false
+      retries: 20
+      delay: 5
+      until: rs_primary_wait.rc == 0
       run_once: true
       delegate_to: "{{ groups['mongo'][0] }}"
 
